@@ -26,8 +26,8 @@ async function fetchChannel(handle: string, name: string, cutoffMs = CUTOFF_MS):
       'User-Agent':
         'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
       Accept: 'text/html,application/xhtml+xml',
+      'Accept-Encoding': 'gzip, deflate, br',
     },
-    signal: AbortSignal.timeout(5000),
     next: { revalidate: 0 },
   });
 
@@ -128,15 +128,23 @@ function dedupe(msgs: Message[]): Message[] {
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  // phase=recent → only last 1 hour from ALL channels (fast first paint)
-  // phase=full   → full 24 hours from ALL channels (background append)
+  const channelHandle = searchParams.get('channel');
   const phase = searchParams.get('phase') ?? 'full';
   const cutoffMs = phase === 'recent' ? 60 * 60 * 1000 : CUTOFF_MS;
 
+  // Single channel — each channel gets its own Vercel function call with full timeout
+  if (channelHandle) {
+    const ch = CHANNELS.find((c) => c.handle === channelHandle);
+    if (!ch) return NextResponse.json({ messages: [] });
+    const messages = await fetchChannel(ch.handle, ch.name, cutoffMs);
+    messages.sort((a, b) => b.pubDate - a.pubDate);
+    return NextResponse.json({ messages });
+  }
+
+  // All channels at once (fallback)
   const results = await Promise.allSettled(
     CHANNELS.map((ch) => fetchChannel(ch.handle, ch.name, cutoffMs))
   );
-
   const all: Message[] = [];
   for (const result of results) {
     if (result.status === 'fulfilled') all.push(...result.value);

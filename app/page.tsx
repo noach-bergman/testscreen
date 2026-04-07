@@ -80,46 +80,60 @@ export default function Home() {
     setView('news');
     setScrollKey((k) => k + 1);
 
-    // Phase 1: last 1 hour from ALL channels — fast first paint
-    fetch('/api/news?phase=recent')
-      .then((r) => r.json())
-      .then((data) => {
-        setMessages(data.messages ?? []);
-        setLoading(false);
+    const channels = ['lelotsenzura', 'abualiexpress', 'firstreportsnews'];
+    let firstArrived = false;
 
-        // Phase 2: full 24h in background — append older messages at bottom
-        fetch('/api/news?phase=full')
-          .then((r) => r.json())
-          .then((data2) => {
-            setMessages((prev) => mergeMessages(prev, data2.messages ?? []));
-          })
-          .catch(() => {});
-      })
-      .catch(() => {
-        // Phase 1 failed — try full directly
-        fetch('/api/news?phase=full')
-          .then((r) => r.json())
-          .then((data) => setMessages(data.messages ?? []))
-          .catch(() => {})
-          .finally(() => setLoading(false));
-      });
+    // Each channel: fetch recent (last 1h) first, then full 24h in background
+    channels.forEach((ch) => {
+      // Phase 1 per channel — recent only
+      fetch(`/api/news?channel=${ch}&phase=recent`)
+        .then((r) => r.json())
+        .then((data) => {
+          const msgs: Message[] = data.messages ?? [];
+          if (!firstArrived && msgs.length > 0) {
+            firstArrived = true;
+            setMessages(msgs);
+            setLoading(false);
+          } else {
+            setMessages((prev) => mergeMessages(prev, msgs));
+            if (!firstArrived) { firstArrived = true; setLoading(false); }
+          }
+          // Phase 2 per channel — full 24h, append older in background
+          fetch(`/api/news?channel=${ch}&phase=full`)
+            .then((r) => r.json())
+            .then((data2) => {
+              setMessages((prev) => mergeMessages(prev, data2.messages ?? []));
+            })
+            .catch(() => {});
+        })
+        .catch(() => {
+          if (!firstArrived) { firstArrived = true; setLoading(false); }
+        });
+    });
 
     returnTimerRef.current = setTimeout(() => setView('clock'), durationMs);
 
+    // Schedule next trigger at the next :00 / :15 / :30 / :45 boundary
     if (nextTimerRef.current) clearTimeout(nextTimerRef.current);
     nextTimerRef.current = setTimeout(
       () => showNews(2 * 60 * 1000),
-      5 * 60 * 1000
+      msUntilNextQuarter()
     );
   }
 
-  // Master timer — 3 min clock, 2 min news, repeat
+  // Master timer — aligned to :00 / :15 / :30 / :45
   useEffect(() => {
-    // Wait 3 minutes before showing news for the first time
-    nextTimerRef.current = setTimeout(
-      () => showNews(2 * 60 * 1000),
-      3 * 60 * 1000
-    );
+    const remaining = msRemainingInNewsWindow();
+    if (remaining > 0) {
+      // Page loaded while news window is active — show for remaining time
+      showNews(remaining);
+    } else {
+      // Wait until next quarter boundary
+      nextTimerRef.current = setTimeout(
+        () => showNews(2 * 60 * 1000),
+        msUntilNextQuarter()
+      );
+    }
 
     return () => {
       if (returnTimerRef.current) clearTimeout(returnTimerRef.current);
