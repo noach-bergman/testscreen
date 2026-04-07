@@ -60,24 +60,52 @@ export default function Home() {
   const returnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nextTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  function mergeMessages(prev: Message[], incoming: Message[]): Message[] {
+    const combined = [...prev, ...incoming];
+    combined.sort((a, b) => b.pubDate - a.pubDate);
+    const seen = new Set<string>();
+    return combined.filter((m) => {
+      const key = m.text.slice(0, 60).toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
   function showNews(durationMs: number) {
-    // Clear any pending return-to-clock timer
     if (returnTimerRef.current) clearTimeout(returnTimerRef.current);
 
+    setMessages([]);
     setLoading(true);
     setView('news');
     setScrollKey((k) => k + 1);
 
-    fetch('/api/news')
+    // Phase 1: last 1 hour from ALL channels — fast first paint
+    fetch('/api/news?phase=recent')
       .then((r) => r.json())
-      .then((data) => setMessages(data.messages ?? []))
-      .catch(() => setMessages([]))
-      .finally(() => setLoading(false));
+      .then((data) => {
+        setMessages(data.messages ?? []);
+        setLoading(false);
 
-    // Return to clock after durationMs
+        // Phase 2: full 24h in background — append older messages at bottom
+        fetch('/api/news?phase=full')
+          .then((r) => r.json())
+          .then((data2) => {
+            setMessages((prev) => mergeMessages(prev, data2.messages ?? []));
+          })
+          .catch(() => {});
+      })
+      .catch(() => {
+        // Phase 1 failed — try full directly
+        fetch('/api/news?phase=full')
+          .then((r) => r.json())
+          .then((data) => setMessages(data.messages ?? []))
+          .catch(() => {})
+          .finally(() => setLoading(false));
+      });
+
     returnTimerRef.current = setTimeout(() => setView('clock'), durationMs);
 
-    // Schedule next news: 2 min (news) + 3 min (clock) = 5 min from now
     if (nextTimerRef.current) clearTimeout(nextTimerRef.current);
     nextTimerRef.current = setTimeout(
       () => showNews(2 * 60 * 1000),
