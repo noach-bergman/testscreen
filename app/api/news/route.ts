@@ -19,7 +19,7 @@ export type Message = {
   pubDate: number;
 };
 
-async function fetchChannel(handle: string, name: string): Promise<Message[]> {
+async function fetchChannel(handle: string, name: string, cutoffMs = CUTOFF_MS): Promise<Message[]> {
   const url = `https://t.me/s/${handle}`;
   const res = await fetch(url, {
     headers: {
@@ -35,7 +35,7 @@ async function fetchChannel(handle: string, name: string): Promise<Message[]> {
 
   const html = await res.text();
   const root = parse(html);
-  const cutoff = Date.now() - CUTOFF_MS;
+  const cutoff = Date.now() - cutoffMs;
   const messages: Message[] = [];
 
   const messageEls = root.querySelectorAll('.tgme_widget_message');
@@ -116,34 +116,31 @@ async function fetchXAccount(username: string, name: string): Promise<Message[]>
   return messages;
 }
 
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const channelHandle = searchParams.get('channel');
-
-  // Single-channel mode: frontend fetches each channel separately for progressive loading
-  if (channelHandle) {
-    const ch = CHANNELS.find((c) => c.handle === channelHandle);
-    if (!ch) return NextResponse.json({ messages: [] });
-    const messages = await fetchChannel(ch.handle, ch.name);
-    messages.sort((a, b) => b.pubDate - a.pubDate);
-    return NextResponse.json({ messages });
-  }
-
-  // Fallback: all channels at once
-  const results = await Promise.allSettled(
-    CHANNELS.map((ch) => fetchChannel(ch.handle, ch.name))
-  );
-  const all: Message[] = [];
-  for (const result of results) {
-    if (result.status === 'fulfilled') all.push(...result.value);
-  }
-  all.sort((a, b) => b.pubDate - a.pubDate);
+function dedupe(msgs: Message[]): Message[] {
   const seen = new Set<string>();
-  const deduped = all.filter((m) => {
+  return msgs.filter((m) => {
     const key = m.text.slice(0, 60).toLowerCase();
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
-  return NextResponse.json({ messages: deduped, fetchedAt: Date.now() });
+}
+
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  // phase=recent → only last 1 hour from ALL channels (fast first paint)
+  // phase=full   → full 24 hours from ALL channels (background append)
+  const phase = searchParams.get('phase') ?? 'full';
+  const cutoffMs = phase === 'recent' ? 60 * 60 * 1000 : CUTOFF_MS;
+
+  const results = await Promise.allSettled(
+    CHANNELS.map((ch) => fetchChannel(ch.handle, ch.name, cutoffMs))
+  );
+
+  const all: Message[] = [];
+  for (const result of results) {
+    if (result.status === 'fulfilled') all.push(...result.value);
+  }
+  all.sort((a, b) => b.pubDate - a.pubDate);
+  return NextResponse.json({ messages: dedupe(all), fetchedAt: Date.now() });
 }
