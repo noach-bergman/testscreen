@@ -19,48 +19,66 @@ export type Message = {
   pubDate: number;
 };
 
+const TG_HEADERS = {
+  'User-Agent':
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+  Accept: 'text/html,application/xhtml+xml',
+  'Accept-Encoding': 'gzip, deflate, br',
+};
+
 async function fetchChannel(handle: string, name: string, cutoffMs = CUTOFF_MS): Promise<Message[]> {
-  const url = `https://t.me/s/${handle}`;
-  const res = await fetch(url, {
-    headers: {
-      'User-Agent':
-        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-      Accept: 'text/html,application/xhtml+xml',
-      'Accept-Encoding': 'gzip, deflate, br',
-    },
-    next: { revalidate: 0 },
-  });
-
-  if (!res.ok) return [];
-
-  const html = await res.text();
-  const root = parse(html);
   const cutoff = Date.now() - cutoffMs;
   const messages: Message[] = [];
 
-  const messageEls = root.querySelectorAll('.tgme_widget_message');
+  // For the full 24h phase fetch up to 3 pages (~60 messages); recent phase needs only 1
+  const maxPages = cutoffMs > 60 * 60 * 1000 ? 3 : 1;
+  let nextUrl: string | null = `https://t.me/s/${handle}`;
 
-  for (const el of messageEls) {
-    const timeEl = el.querySelector('time');
-    const datetime = timeEl?.getAttribute('datetime');
-    if (!datetime) continue;
+  for (let page = 0; page < maxPages && nextUrl; page++) {
+    const res = await fetch(nextUrl, { headers: TG_HEADERS, next: { revalidate: 0 } });
+    if (!res.ok) break;
 
-    const pubDate = new Date(datetime).getTime();
-    if (isNaN(pubDate) || pubDate < cutoff) continue;
+    const html = await res.text();
+    const root = parse(html);
 
-    const textEl = el.querySelector('.tgme_widget_message_text');
-    if (!textEl) continue;
+    // Extract oldest message ID for pagination (?before=<id>)
+    let oldestId: number | null = null;
+    let reachedCutoff = false;
 
-    // Get plain text, collapse whitespace
-    let text = textEl.text.replace(/\s+/g, ' ').trim();
-    if (!text || text.length < 10) continue;
+    const wraps = root.querySelectorAll('.tgme_widget_message_wrap');
+    if (!wraps.length) break;
 
-    // Truncate long messages
-    if (text.length > 220) {
-      text = text.slice(0, 220).replace(/\s+\S*$/, '') + '…';
+    for (const wrap of wraps) {
+      const post = wrap.getAttribute('data-post');
+      if (post) {
+        const id = parseInt(post.split('/')[1]);
+        if (!isNaN(id) && (oldestId === null || id < oldestId)) oldestId = id;
+      }
+
+      const timeEl = wrap.querySelector('time');
+      const datetime = timeEl?.getAttribute('datetime');
+      if (!datetime) continue;
+
+      const pubDate = new Date(datetime).getTime();
+      if (isNaN(pubDate)) continue;
+      if (pubDate < cutoff) { reachedCutoff = true; continue; }
+
+      // Prefer .js-message_text (main message text) over quoted reply text
+      const textEl = wrap.querySelector('.tgme_widget_message_text.js-message_text')
+                  ?? wrap.querySelector('.tgme_widget_message_text');
+      if (!textEl) continue;
+
+      let text = textEl.text.replace(/\s+/g, ' ').trim();
+      if (!text || text.length < 10) continue;
+
+      if (text.length > 220) {
+        text = text.slice(0, 220).replace(/\s+\S*$/, '') + '…';
+      }
+
+      messages.push({ text, source: name, pubDate });
     }
 
-    messages.push({ text, source: name, pubDate });
+    nextUrl = (oldestId && !reachedCutoff) ? `https://t.me/s/${handle}?before=${oldestId}` : null;
   }
 
   return messages;
