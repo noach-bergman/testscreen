@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { parse } from 'node-html-parser';
 
 export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+export const maxDuration = 30;
 
 const CHANNELS = [
   { name: 'ללא צנזורה', handle: 'lelotsenzura' },
