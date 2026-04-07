@@ -27,6 +27,7 @@ async function fetchChannel(handle: string, name: string): Promise<Message[]> {
         'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
       Accept: 'text/html,application/xhtml+xml',
     },
+    signal: AbortSignal.timeout(5000),
     next: { revalidate: 0 },
   });
 
@@ -63,20 +64,6 @@ async function fetchChannel(handle: string, name: string): Promise<Message[]> {
   }
 
   return messages;
-}
-
-async function translateToHebrew(text: string): Promise<string> {
-  try {
-    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=he&dt=t&q=${encodeURIComponent(text)}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) return text;
-    const data = await res.json();
-    // Response format: [[[translatedText, original, ...], ...], ...]
-    const translated: string = data[0]?.map((chunk: [string]) => chunk[0]).join('') ?? text;
-    return translated.trim() || text;
-  } catch {
-    return text;
-  }
 }
 
 // Parse RSS/Atom XML to extract tweets from X via RSSHub
@@ -123,8 +110,7 @@ async function fetchXAccount(username: string, name: string): Promise<Message[]>
     if (isNaN(pubDate) || pubDate < cutoff) continue;
 
     const truncated = text.length > 220 ? text.slice(0, 220).replace(/\s+\S*$/, '') + '…' : text;
-    const translated = await translateToHebrew(truncated);
-    messages.push({ text: translated, source: name, pubDate });
+    messages.push({ text: truncated, source: name, pubDate });
   }
 
   return messages;
