@@ -211,6 +211,7 @@ export default function Home() {
               key={scrollKey}
               ref={listRef}
               style={{ animation: `scrollUp ${scrollDuration}s linear forwards` }}
+              onAnimationEnd={() => setNewsVisible(false)}
             >
               <div className="h-[50vh]" />
               <div className="px-5 pb-2 text-gray-600 text-xs tracking-[0.25em] uppercase">
