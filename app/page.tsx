@@ -4,7 +4,52 @@ import { useState, useEffect, useRef } from 'react';
 
 type Message = { text: string; source: string; pubDate: number };
 
-/** How many ms until the next :00 / :15 / :30 / :45 boundary */
+const CHANNELS = [
+  { handle: 'lelotsenzura', name: 'ללא צנזורה' },
+  { handle: 'abualiexpress', name: 'Abu Ali Express' },
+  { handle: 'firstreportsnews', name: 'First Reports' },
+];
+
+// CORS proxies tried in order
+const PROXIES = [
+  (url: string) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+  (url: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+];
+
+async function fetchChannel(handle: string, name: string, cutoffMs: number): Promise<Message[]> {
+  const telegramUrl = `https://t.me/s/${handle}`;
+  let html = '';
+
+  for (const makeProxy of PROXIES) {
+    try {
+      const res = await fetch(makeProxy(telegramUrl));
+      if (res.ok) { html = await res.text(); break; }
+    } catch { continue; }
+  }
+
+  if (!html) return [];
+
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const cutoff = Date.now() - cutoffMs;
+  const messages: Message[] = [];
+
+  doc.querySelectorAll('.tgme_widget_message').forEach((el) => {
+    const datetime = el.querySelector('time')?.getAttribute('datetime');
+    if (!datetime) return;
+    const pubDate = new Date(datetime).getTime();
+    if (isNaN(pubDate) || pubDate < cutoff) return;
+
+    let text = el.querySelector('.tgme_widget_message_text')
+      ?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+    if (!text || text.length < 10) return;
+    if (text.length > 220) text = text.slice(0, 220).replace(/\s+\S*$/, '') + '…';
+
+    messages.push({ text, source: name, pubDate });
+  });
+
+  return messages;
+}
+
 function msUntilNextQuarter(): number {
   const now = new Date();
   const msIntoQuarter =
@@ -12,14 +57,24 @@ function msUntilNextQuarter(): number {
   return 15 * 60 * 1000 - msIntoQuarter;
 }
 
-/** If we're currently inside a 2-minute news window, return ms remaining; else 0 */
 function msRemainingInNewsWindow(): number {
   const now = new Date();
   const msIntoQuarter =
     ((now.getMinutes() % 15) * 60 + now.getSeconds()) * 1000 + now.getMilliseconds();
   const newsWindowMs = 2 * 60 * 1000;
-  if (msIntoQuarter < newsWindowMs) return newsWindowMs - msIntoQuarter;
-  return 0;
+  return msIntoQuarter < newsWindowMs ? newsWindowMs - msIntoQuarter : 0;
+}
+
+function mergeMessages(prev: Message[], incoming: Message[]): Message[] {
+  const combined = [...prev, ...incoming];
+  combined.sort((a, b) => b.pubDate - a.pubDate);
+  const seen = new Set<string>();
+  return combined.filter((m) => {
+    const key = m.text.slice(0, 60).toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 export default function Home() {
@@ -29,23 +84,20 @@ export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
   const [scrollDuration, setScrollDuration] = useState(90);
-  const [scrollKey, setScrollKey] = useState(0); // force re-mount animation
+  const [scrollKey, setScrollKey] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
+  const returnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const nextTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Clock — ticks every second
   useEffect(() => {
     const timeFmt = new Intl.DateTimeFormat('en-US', {
       timeZone: 'America/New_York',
-      hour: 'numeric',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: true,
+      hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true,
     });
     const dateFmt = new Intl.DateTimeFormat('en-US', {
       timeZone: 'America/New_York',
-      weekday: 'long',
-      month: 'long',
-      day: 'numeric',
+      weekday: 'long', month: 'long', day: 'numeric',
     });
     function tick() {
       const now = new Date();
@@ -57,21 +109,6 @@ export default function Home() {
     return () => clearInterval(id);
   }, []);
 
-  const returnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const nextTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  function mergeMessages(prev: Message[], incoming: Message[]): Message[] {
-    const combined = [...prev, ...incoming];
-    combined.sort((a, b) => b.pubDate - a.pubDate);
-    const seen = new Set<string>();
-    return combined.filter((m) => {
-      const key = m.text.slice(0, 60).toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  }
-
   function showNews(durationMs: number) {
     if (returnTimerRef.current) clearTimeout(returnTimerRef.current);
 
@@ -80,40 +117,31 @@ export default function Home() {
     setView('news');
     setScrollKey((k) => k + 1);
 
-    const channels = ['lelotsenzura', 'abualiexpress', 'firstreportsnews'];
     let firstArrived = false;
+    const RECENT = 60 * 60 * 1000;      // 1 hour
+    const FULL   = 24 * 60 * 60 * 1000; // 24 hours
 
-    // Each channel: fetch recent (last 1h) first, then full 24h in background
-    channels.forEach((ch) => {
-      // Phase 1 per channel — recent only
-      fetch(`/api/news?channel=${ch}&phase=recent`)
-        .then((r) => r.json())
-        .then((data) => {
-          const msgs: Message[] = data.messages ?? [];
-          if (!firstArrived && msgs.length > 0) {
-            firstArrived = true;
-            setMessages(msgs);
-            setLoading(false);
-          } else {
-            setMessages((prev) => mergeMessages(prev, msgs));
-            if (!firstArrived) { firstArrived = true; setLoading(false); }
-          }
-          // Phase 2 per channel — full 24h, append older in background
-          fetch(`/api/news?channel=${ch}&phase=full`)
-            .then((r) => r.json())
-            .then((data2) => {
-              setMessages((prev) => mergeMessages(prev, data2.messages ?? []));
-            })
-            .catch(() => {});
-        })
-        .catch(() => {
-          if (!firstArrived) { firstArrived = true; setLoading(false); }
-        });
+    CHANNELS.forEach(({ handle, name }) => {
+      // Phase 1: last 1 hour — show immediately when first channel arrives
+      fetchChannel(handle, name, RECENT).then((msgs) => {
+        if (!firstArrived) {
+          firstArrived = true;
+          setMessages(msgs);
+          setLoading(false);
+        } else {
+          setMessages((prev) => mergeMessages(prev, msgs));
+        }
+        // Phase 2: full 24h — append older messages in background
+        fetchChannel(handle, name, FULL).then((allMsgs) => {
+          setMessages((prev) => mergeMessages(prev, allMsgs));
+        }).catch(() => {});
+      }).catch(() => {
+        if (!firstArrived) { firstArrived = true; setLoading(false); }
+      });
     });
 
     returnTimerRef.current = setTimeout(() => setView('clock'), durationMs);
 
-    // Schedule next trigger at the next :00 / :15 / :30 / :45 boundary
     if (nextTimerRef.current) clearTimeout(nextTimerRef.current);
     nextTimerRef.current = setTimeout(
       () => showNews(2 * 60 * 1000),
@@ -125,16 +153,13 @@ export default function Home() {
   useEffect(() => {
     const remaining = msRemainingInNewsWindow();
     if (remaining > 0) {
-      // Page loaded while news window is active — show for remaining time
       showNews(remaining);
     } else {
-      // Wait until next quarter boundary
       nextTimerRef.current = setTimeout(
         () => showNews(2 * 60 * 1000),
         msUntilNextQuarter()
       );
     }
-
     return () => {
       if (returnTimerRef.current) clearTimeout(returnTimerRef.current);
       if (nextTimerRef.current) clearTimeout(nextTimerRef.current);
@@ -142,13 +167,11 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Calculate scroll duration based on content height
+  // Scroll duration based on content height
   useEffect(() => {
     if (view === 'news' && listRef.current && !loading) {
       const height = listRef.current.scrollHeight;
-      // ~35px per second — slow, comfortable reading pace on phone
-      const duration = Math.max(60, Math.round(height / 35));
-      setScrollDuration(duration);
+      setScrollDuration(Math.max(60, Math.round(height / 35)));
     }
   }, [messages, view, loading]);
 
@@ -162,12 +185,8 @@ export default function Home() {
           >
             {timeString}
           </div>
-          <div className="text-gray-600 text-sm tracking-[0.3em] uppercase">
-            Brooklyn
-          </div>
-          <div className="text-gray-700 text-xs tracking-wider mt-1">
-            {dateString}
-          </div>
+          <div className="text-gray-600 text-sm tracking-[0.3em] uppercase">Brooklyn</div>
+          <div className="text-gray-700 text-xs tracking-wider mt-1">{dateString}</div>
           <button
             onClick={() => showNews(2 * 60 * 1000)}
             className="mt-8 px-6 py-2 border border-gray-700 text-gray-500 text-xs tracking-widest uppercase rounded hover:border-gray-500 hover:text-gray-300 transition-colors active:opacity-60"
@@ -193,22 +212,14 @@ export default function Home() {
             <div
               key={scrollKey}
               ref={listRef}
-              style={{
-                animation: `scrollUp ${scrollDuration}s linear forwards`,
-              }}
+              style={{ animation: `scrollUp ${scrollDuration}s linear forwards` }}
             >
-              {/* Top spacer so first item starts from middle of screen */}
               <div className="h-[50vh]" />
-
               <div className="px-5 pb-2 text-gray-600 text-xs tracking-[0.25em] uppercase">
                 עדכונים אחרונים · Last 24h
               </div>
-
               {messages.map((m, i) => (
-                <div
-                  key={i}
-                  className="px-4 py-3 border-b border-gray-900"
-                >
+                <div key={i} className="px-4 py-3 border-b border-gray-900">
                   <p className="text-white leading-snug" style={{ fontSize: 'clamp(0.8rem, 3.2vw, 1rem)' }}>
                     {m.text}
                   </p>
@@ -219,16 +230,12 @@ export default function Home() {
                     <p className="text-gray-600" style={{ fontSize: '0.65rem' }}>
                       {new Intl.DateTimeFormat('en-US', {
                         timeZone: 'America/New_York',
-                        hour: 'numeric',
-                        minute: '2-digit',
-                        hour12: true,
+                        hour: 'numeric', minute: '2-digit', hour12: true,
                       }).format(new Date(m.pubDate))}
                     </p>
                   </div>
                 </div>
               ))}
-
-              {/* Bottom spacer so last item scrolls fully off */}
               <div className="h-screen" />
             </div>
           )}
