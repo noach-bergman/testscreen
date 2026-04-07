@@ -117,26 +117,30 @@ export default function Home() {
     setView('news');
     setScrollKey((k) => k + 1);
 
-    let firstArrived = false;
+    let respondedCount = 0;
+    let hasMessages = false;
     const RECENT = 60 * 60 * 1000;      // 1 hour
     const FULL   = 24 * 60 * 60 * 1000; // 24 hours
 
     CHANNELS.forEach(({ handle, name }) => {
-      // Phase 1: last 1 hour — show immediately when first channel arrives
+      // Phase 1: last 1 hour — keep loading until at least one channel has messages
       fetchChannel(handle, name, RECENT).then((msgs) => {
-        if (!firstArrived) {
-          firstArrived = true;
-          setMessages(msgs);
-          setLoading(false);
-        } else {
+        respondedCount++;
+        if (msgs.length > 0) {
+          hasMessages = true;
           setMessages((prev) => mergeMessages(prev, msgs));
+          setLoading(false);
+        } else if (respondedCount === CHANNELS.length && !hasMessages) {
+          // All channels responded but nothing found
+          setLoading(false);
         }
         // Phase 2: full 24h — append older messages in background
         fetchChannel(handle, name, FULL).then((allMsgs) => {
           setMessages((prev) => mergeMessages(prev, allMsgs));
         }).catch(() => {});
       }).catch(() => {
-        if (!firstArrived) { firstArrived = true; setLoading(false); }
+        respondedCount++;
+        if (respondedCount === CHANNELS.length && !hasMessages) setLoading(false);
       });
     });
 
