@@ -198,12 +198,6 @@ export default function Home() {
         </div>
         <div className="text-gray-600 text-sm tracking-[0.3em] uppercase">Brooklyn</div>
         <div className="text-gray-700 text-xs tracking-wider mt-1">{dateString}</div>
-        <button
-          onClick={() => showNews(2 * 60 * 1000)}
-          className="mt-8 px-6 py-2 border border-gray-700 text-gray-500 text-xs tracking-widest uppercase rounded hover:border-gray-500 hover:text-gray-300 transition-colors active:opacity-60"
-        >
-          הצג חדשות עכשיו
-        </button>
       </div>
 
       {/* News overlay — sits on top of clock */}
