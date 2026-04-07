@@ -20,7 +20,7 @@ async function fetchChannel(handle: string, _name: string, cutoffMs: number): Pr
   } catch { return []; }
 }
 
-const INTERVAL_MS = 5 * 60 * 1000; // change to 15 * 60 * 1000 for production
+const INTERVAL_MS = 15 * 60 * 1000;
 
 function msUntilNextInterval(): number {
   const now = new Date();

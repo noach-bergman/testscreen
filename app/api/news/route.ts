@@ -35,7 +35,9 @@ async function fetchChannel(handle: string, name: string, cutoffMs = CUTOFF_MS):
   let nextUrl: string | null = `https://t.me/s/${handle}`;
 
   for (let page = 0; page < maxPages && nextUrl; page++) {
-    const res = await fetch(nextUrl, { headers: TG_HEADERS, next: { revalidate: 0 } });
+    console.log(`[fetchChannel] ${handle} page=${page} url=${nextUrl}`);
+    const res = await fetch(nextUrl, { headers: TG_HEADERS, cache: 'no-store' });
+    console.log(`[fetchChannel] ${handle} page=${page} status=${res.status}`);
     if (!res.ok) break;
 
     const html = await res.text();
