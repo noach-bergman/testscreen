@@ -10,44 +10,14 @@ const CHANNELS = [
   { handle: 'firstreportsnews', name: 'First Reports' },
 ];
 
-// CORS proxies tried in order
-const PROXIES = [
-  (url: string) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-  (url: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-];
-
-async function fetchChannel(handle: string, name: string, cutoffMs: number): Promise<Message[]> {
-  const telegramUrl = `https://t.me/s/${handle}`;
-  let html = '';
-
-  for (const makeProxy of PROXIES) {
-    try {
-      const res = await fetch(makeProxy(telegramUrl));
-      if (res.ok) { html = await res.text(); break; }
-    } catch { continue; }
-  }
-
-  if (!html) return [];
-
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  const cutoff = Date.now() - cutoffMs;
-  const messages: Message[] = [];
-
-  doc.querySelectorAll('.tgme_widget_message').forEach((el) => {
-    const datetime = el.querySelector('time')?.getAttribute('datetime');
-    if (!datetime) return;
-    const pubDate = new Date(datetime).getTime();
-    if (isNaN(pubDate) || pubDate < cutoff) return;
-
-    let text = el.querySelector('.tgme_widget_message_text')
-      ?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
-    if (!text || text.length < 10) return;
-    if (text.length > 220) text = text.slice(0, 220).replace(/\s+\S*$/, '') + '…';
-
-    messages.push({ text, source: name, pubDate });
-  });
-
-  return messages;
+async function fetchChannel(handle: string, _name: string, cutoffMs: number): Promise<Message[]> {
+  const phase = cutoffMs <= 60 * 60 * 1000 ? 'recent' : 'full';
+  try {
+    const res = await fetch(`/api/news?channel=${handle}&phase=${phase}`);
+    if (!res.ok) return [];
+    const { messages } = await res.json();
+    return messages ?? [];
+  } catch { return []; }
 }
 
 function msUntilNextQuarter(): number {
