@@ -30,8 +30,8 @@ async function fetchChannel(handle: string, name: string, cutoffMs = CUTOFF_MS):
   const cutoff = Date.now() - cutoffMs;
   const messages: Message[] = [];
 
-  // For the full 24h phase fetch up to 3 pages (~60 messages); recent phase needs only 1
-  const maxPages = cutoffMs > 60 * 60 * 1000 ? 3 : 1;
+  // For the full 24h phase paginate until cutoff is reached (up to 8 pages); recent needs only 1
+  const maxPages = cutoffMs > 60 * 60 * 1000 ? 8 : 1;
   let nextUrl: string | null = `https://t.me/s/${handle}`;
 
   for (let page = 0; page < maxPages && nextUrl; page++) {
