@@ -116,23 +116,28 @@ async function fetchXAccount(username: string, name: string): Promise<Message[]>
   return messages;
 }
 
-export async function GET() {
-  const results = await Promise.allSettled([
-    ...CHANNELS.map((ch) => fetchChannel(ch.handle, ch.name)),
-    fetchXAccount('Osint613', 'Osint613 / X'),
-  ]);
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const channelHandle = searchParams.get('channel');
 
-  const all: Message[] = [];
-  for (const result of results) {
-    if (result.status === 'fulfilled') {
-      all.push(...result.value);
-    }
+  // Single-channel mode: frontend fetches each channel separately for progressive loading
+  if (channelHandle) {
+    const ch = CHANNELS.find((c) => c.handle === channelHandle);
+    if (!ch) return NextResponse.json({ messages: [] });
+    const messages = await fetchChannel(ch.handle, ch.name);
+    messages.sort((a, b) => b.pubDate - a.pubDate);
+    return NextResponse.json({ messages });
   }
 
-  // Sort newest first
+  // Fallback: all channels at once
+  const results = await Promise.allSettled(
+    CHANNELS.map((ch) => fetchChannel(ch.handle, ch.name))
+  );
+  const all: Message[] = [];
+  for (const result of results) {
+    if (result.status === 'fulfilled') all.push(...result.value);
+  }
   all.sort((a, b) => b.pubDate - a.pubDate);
-
-  // Deduplicate (same first 60 chars)
   const seen = new Set<string>();
   const deduped = all.filter((m) => {
     const key = m.text.slice(0, 60).toLowerCase();
@@ -140,6 +145,5 @@ export async function GET() {
     seen.add(key);
     return true;
   });
-
   return NextResponse.json({ messages: deduped, fetchedAt: Date.now() });
 }
