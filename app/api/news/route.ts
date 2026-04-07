@@ -45,17 +45,18 @@ async function fetchChannel(handle: string, name: string, cutoffMs = CUTOFF_MS):
     let oldestId: number | null = null;
     let reachedCutoff = false;
 
-    const wraps = root.querySelectorAll('.tgme_widget_message_wrap');
-    if (!wraps.length) break;
-
-    for (const wrap of wraps) {
+    // Extract oldest wrap ID for pagination (data-post lives on .tgme_widget_message_wrap)
+    for (const wrap of root.querySelectorAll('.tgme_widget_message_wrap')) {
       const post = wrap.getAttribute('data-post');
       if (post) {
         const id = parseInt(post.split('/')[1]);
         if (!isNaN(id) && (oldestId === null || id < oldestId)) oldestId = id;
       }
+    }
 
-      const timeEl = wrap.querySelector('time');
+    // Parse messages using the inner element (handles albums correctly)
+    for (const el of root.querySelectorAll('.tgme_widget_message')) {
+      const timeEl = el.querySelector('time[datetime]');
       const datetime = timeEl?.getAttribute('datetime');
       if (!datetime) continue;
 
@@ -63,9 +64,9 @@ async function fetchChannel(handle: string, name: string, cutoffMs = CUTOFF_MS):
       if (isNaN(pubDate)) continue;
       if (pubDate < cutoff) { reachedCutoff = true; continue; }
 
-      // Prefer .js-message_text (main message text) over quoted reply text
-      const textEl = wrap.querySelector('.tgme_widget_message_text.js-message_text')
-                  ?? wrap.querySelector('.tgme_widget_message_text');
+      // Prefer .js-message_text (main text) over quoted reply text
+      const textEl = el.querySelector('.tgme_widget_message_text.js-message_text')
+                  ?? el.querySelector('.tgme_widget_message_text');
       if (!textEl) continue;
 
       let text = textEl.text.replace(/\s+/g, ' ').trim();
@@ -78,6 +79,7 @@ async function fetchChannel(handle: string, name: string, cutoffMs = CUTOFF_MS):
       messages.push({ text, source: name, pubDate });
     }
 
+    if (!root.querySelectorAll('.tgme_widget_message_wrap').length) break;
     nextUrl = (oldestId && !reachedCutoff) ? `https://t.me/s/${handle}?before=${oldestId}` : null;
   }
 

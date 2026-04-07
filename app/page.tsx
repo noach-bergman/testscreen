@@ -20,19 +20,21 @@ async function fetchChannel(handle: string, _name: string, cutoffMs: number): Pr
   } catch { return []; }
 }
 
-function msUntilNextQuarter(): number {
+const INTERVAL_MS = 5 * 60 * 1000; // change to 15 * 60 * 1000 for production
+
+function msUntilNextInterval(): number {
   const now = new Date();
-  const msIntoQuarter =
-    ((now.getMinutes() % 15) * 60 + now.getSeconds()) * 1000 + now.getMilliseconds();
-  return 15 * 60 * 1000 - msIntoQuarter;
+  const msIntoInterval =
+    ((now.getMinutes() % (INTERVAL_MS / 60000)) * 60 + now.getSeconds()) * 1000 + now.getMilliseconds();
+  return INTERVAL_MS - msIntoInterval;
 }
 
 function msRemainingInNewsWindow(): number {
   const now = new Date();
-  const msIntoQuarter =
-    ((now.getMinutes() % 15) * 60 + now.getSeconds()) * 1000 + now.getMilliseconds();
+  const msIntoInterval =
+    ((now.getMinutes() % (INTERVAL_MS / 60000)) * 60 + now.getSeconds()) * 1000 + now.getMilliseconds();
   const newsWindowMs = 2 * 60 * 1000;
-  return msIntoQuarter < newsWindowMs ? newsWindowMs - msIntoQuarter : 0;
+  return msIntoInterval < newsWindowMs ? newsWindowMs - msIntoInterval : 0;
 }
 
 function mergeMessages(prev: Message[], incoming: Message[]): Message[] {
@@ -58,6 +60,7 @@ export default function Home() {
   const listRef = useRef<HTMLDivElement>(null);
   const returnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nextTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hasEverLoadedRef = useRef(false);
 
   // Clock — ticks every second
@@ -126,10 +129,18 @@ export default function Home() {
     returnTimerRef.current = setTimeout(() => setNewsVisible(false), durationMs);
 
     if (nextTimerRef.current) clearTimeout(nextTimerRef.current);
+    const msToNext = msUntilNextInterval();
     nextTimerRef.current = setTimeout(
       () => showNews(2 * 60 * 1000),
-      msUntilNextQuarter()
+      msToNext
     );
+
+    // Prefetch 1 minute before next open
+    if (prefetchTimerRef.current) clearTimeout(prefetchTimerRef.current);
+    const msToPrefetch = msToNext - 60 * 1000;
+    if (msToPrefetch > 0) {
+      prefetchTimerRef.current = setTimeout(fetchAllMessages, msToPrefetch);
+    }
   }
 
   // Background fetch on mount
@@ -145,20 +156,24 @@ export default function Home() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Master timer — aligned to :00 / :15 / :30 / :45
+  // Master timer — aligned to interval marks
   useEffect(() => {
     const remaining = msRemainingInNewsWindow();
     if (remaining > 0) {
       showNews(remaining);
     } else {
-      nextTimerRef.current = setTimeout(
-        () => showNews(2 * 60 * 1000),
-        msUntilNextQuarter()
-      );
+      const msToNext = msUntilNextInterval();
+      nextTimerRef.current = setTimeout(() => showNews(2 * 60 * 1000), msToNext);
+      // Prefetch 1 minute before first open
+      const msToPrefetch = msToNext - 60 * 1000;
+      if (msToPrefetch > 0) {
+        prefetchTimerRef.current = setTimeout(fetchAllMessages, msToPrefetch);
+      }
     }
     return () => {
       if (returnTimerRef.current) clearTimeout(returnTimerRef.current);
       if (nextTimerRef.current) clearTimeout(nextTimerRef.current);
+      if (prefetchTimerRef.current) clearTimeout(prefetchTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
