@@ -48,16 +48,17 @@ function mergeMessages(prev: Message[], incoming: Message[]): Message[] {
 }
 
 export default function Home() {
-  const [view, setView] = useState<'clock' | 'news'>('clock');
+  const [newsVisible, setNewsVisible] = useState(false);
   const [timeString, setTimeString] = useState('');
   const [dateString, setDateString] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [scrollDuration, setScrollDuration] = useState(90);
   const [scrollKey, setScrollKey] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
   const returnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nextTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasEverLoadedRef = useRef(false);
 
   // Clock — ticks every second
   useEffect(() => {
@@ -79,42 +80,50 @@ export default function Home() {
     return () => clearInterval(id);
   }, []);
 
-  function showNews(durationMs: number) {
-    if (returnTimerRef.current) clearTimeout(returnTimerRef.current);
-
-    setMessages([]);
-    setLoading(true);
-    setView('news');
-    setScrollKey((k) => k + 1);
-
+  function fetchAllMessages() {
     let respondedCount = 0;
     let hasMessages = false;
-    const RECENT = 60 * 60 * 1000;      // 1 hour
-    const FULL   = 24 * 60 * 60 * 1000; // 24 hours
+    const RECENT = 60 * 60 * 1000;
+    const FULL   = 24 * 60 * 60 * 1000;
 
     CHANNELS.forEach(({ handle, name }) => {
-      // Phase 1: last 1 hour — keep loading until at least one channel has messages
       fetchChannel(handle, name, RECENT).then((msgs) => {
         respondedCount++;
         if (msgs.length > 0) {
           hasMessages = true;
           setMessages((prev) => mergeMessages(prev, msgs));
-          setLoading(false);
+          if (!hasEverLoadedRef.current) {
+            hasEverLoadedRef.current = true;
+            setLoading(false);
+          }
         } else if (respondedCount === CHANNELS.length && !hasMessages) {
-          // All channels responded but nothing found
-          setLoading(false);
+          if (!hasEverLoadedRef.current) {
+            hasEverLoadedRef.current = true;
+            setLoading(false);
+          }
         }
-        // Phase 2: full 24h — append older messages in background
         fetchChannel(handle, name, FULL).then((allMsgs) => {
           setMessages((prev) => mergeMessages(prev, allMsgs));
         }).catch(() => {});
       }).catch(() => {
         respondedCount++;
-        if (respondedCount === CHANNELS.length && !hasMessages) setLoading(false);
+        if (respondedCount === CHANNELS.length && !hasMessages) {
+          if (!hasEverLoadedRef.current) {
+            hasEverLoadedRef.current = true;
+            setLoading(false);
+          }
+        }
       });
     });
+  }
 
-    returnTimerRef.current = setTimeout(() => setView('clock'), durationMs);
+  function showNews(durationMs: number) {
+    if (returnTimerRef.current) clearTimeout(returnTimerRef.current);
+
+    setNewsVisible(true);
+    setScrollKey((k) => k + 1);
+
+    returnTimerRef.current = setTimeout(() => setNewsVisible(false), durationMs);
 
     if (nextTimerRef.current) clearTimeout(nextTimerRef.current);
     nextTimerRef.current = setTimeout(
@@ -122,6 +131,19 @@ export default function Home() {
       msUntilNextQuarter()
     );
   }
+
+  // Background fetch on mount
+  useEffect(() => {
+    fetchAllMessages();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Periodic background refresh every 10 minutes
+  useEffect(() => {
+    const id = setInterval(fetchAllMessages, 10 * 60 * 1000);
+    return () => clearInterval(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Master timer — aligned to :00 / :15 / :30 / :45
   useEffect(() => {
@@ -143,33 +165,35 @@ export default function Home() {
 
   // Scroll duration based on content height
   useEffect(() => {
-    if (view === 'news' && listRef.current && !loading) {
+    if (newsVisible && listRef.current && !loading) {
       const height = listRef.current.scrollHeight;
       setScrollDuration(Math.max(60, Math.round(height / 35)));
     }
-  }, [messages, view, loading]);
+  }, [messages, newsVisible, loading]);
 
   return (
-    <main className="bg-black min-h-screen w-full overflow-hidden select-none">
-      {view === 'clock' ? (
-        <div className="flex flex-col items-center justify-center h-screen gap-4">
-          <div
-            className="text-white font-thin tracking-widest tabular-nums"
-            style={{ fontSize: 'clamp(2.5rem, 12vw, 5rem)' }}
-          >
-            {timeString}
-          </div>
-          <div className="text-gray-600 text-sm tracking-[0.3em] uppercase">Brooklyn</div>
-          <div className="text-gray-700 text-xs tracking-wider mt-1">{dateString}</div>
-          <button
-            onClick={() => showNews(2 * 60 * 1000)}
-            className="mt-8 px-6 py-2 border border-gray-700 text-gray-500 text-xs tracking-widest uppercase rounded hover:border-gray-500 hover:text-gray-300 transition-colors active:opacity-60"
-          >
-            הצג חדשות עכשיו
-          </button>
+    <main className="bg-black min-h-screen w-full overflow-hidden select-none relative">
+      {/* Clock — always rendered */}
+      <div className="flex flex-col items-center justify-center h-screen gap-4">
+        <div
+          className="text-white font-thin tracking-widest tabular-nums"
+          style={{ fontSize: 'clamp(2.5rem, 12vw, 5rem)' }}
+        >
+          {timeString}
         </div>
-      ) : (
-        <div className="overflow-hidden h-screen w-full">
+        <div className="text-gray-600 text-sm tracking-[0.3em] uppercase">Brooklyn</div>
+        <div className="text-gray-700 text-xs tracking-wider mt-1">{dateString}</div>
+        <button
+          onClick={() => showNews(2 * 60 * 1000)}
+          className="mt-8 px-6 py-2 border border-gray-700 text-gray-500 text-xs tracking-widest uppercase rounded hover:border-gray-500 hover:text-gray-300 transition-colors active:opacity-60"
+        >
+          הצג חדשות עכשיו
+        </button>
+      </div>
+
+      {/* News overlay — sits on top of clock */}
+      {newsVisible && (
+        <div className="absolute inset-0 bg-black overflow-hidden">
           {loading ? (
             <div className="flex items-center justify-center h-screen">
               <div className="text-gray-600 text-sm tracking-widest uppercase animate-pulse">
